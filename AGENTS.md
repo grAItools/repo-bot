@@ -8,8 +8,14 @@ repositories reference, and as a standalone server.
 The project is at the very beginning. There is no code or tooling yet. The
 design is in
 [`docs/superpowers/specs/2026-11-23-repo-bot-design.md`](docs/superpowers/specs/2026-11-23-repo-bot-design.md).
-Read it before any work. The next piece of work is the implementation plan
-for that design.
+Read it before any work.
+
+The design's open checks are answered in
+[`docs/superpowers/specs/2026-11-23-verification-findings.md`](docs/superpowers/specs/2026-11-23-verification-findings.md).
+The work is split into four plans, listed in
+[`docs/superpowers/plans/2026-11-23-v1-roadmap.md`](docs/superpowers/plans/2026-11-23-v1-roadmap.md).
+The next piece of work is executing plan 1, once the maintainer has approved
+it.
 
 ## Development workflow (mandatory)
 
