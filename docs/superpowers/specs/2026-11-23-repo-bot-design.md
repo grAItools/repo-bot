@@ -1,6 +1,7 @@
 # repo-bot design
 
-Status: draft, awaiting maintainer approval. Nothing is built until it is approved.
+Status: draft, awaiting maintainer approval. Merging the pull request that
+adds this document approves it. Nothing is built before that.
 
 Date: 2026-11-23
 
@@ -49,8 +50,11 @@ write permissions and reacts to text that strangers can post.
 - Target repositories are public and accept pull requests from forks. Future
   commands may need to run or modify pull request code, so the security model
   has to be strict from the start.
-- The server deployment target is a Docker container for now. This was given
-  as a provisional answer.
+- The Actions deployment runs directly on the standard GitHub runner, not in
+  a container. Software that a command needs is installed on demand, when
+  that command is triggered.
+- The server deployment is a Docker container for now. This was given as a
+  provisional answer.
 - The repository uses a harness-agnostic agent layout inspired by the grAItools
   project blueprint, and Superpowers as the development workflow.
 
@@ -63,8 +67,13 @@ write permissions and reacts to text that strangers can post.
    OpenAI-compatible LLM endpoint, with CSCS as the documented default.
 3. `/help`, listing the commands enabled in the current repository.
    (Proposed.)
-4. Two deployments from one codebase, with identical command behaviour.
-5. A repository that agents can develop safely: blocking quality and security
+4. Two deployments from one codebase. The same comment leads to the same
+   decision and the same action in both, except for the one difference stated
+   in "Limits on use".
+5. In the Actions deployment, a command pays only for the software it uses.
+   A command that needs no extra software starts as fast as the runner
+   allows.
+6. A repository that agents can develop safely: blocking quality and security
    checks, a written threat model, and tests for every security rule.
 
 ## Non-goals for version 1
@@ -80,6 +89,8 @@ write permissions and reacts to text that strangers can post.
   language, review sections). PR-Agent's behaviour is fixed by the bot in
   version 1. (Proposed.)
 - Rate limiting beyond the duplicate-run rule in "Limits on use".
+- Running the Actions deployment on self-hosted, Windows, macOS, or Arm
+  runners. (Proposed.)
 - `@repo-bot` mention syntax.
 - Platforms other than GitHub.com. GitHub Enterprise Server is not tested.
 - A hosted public instance of the server. Each organisation runs its own.
@@ -89,10 +100,13 @@ write permissions and reacts to text that strangers can post.
 The project has failed, even if the commands work, if any of these is true:
 
 - Someone without write access to a repository can make the bot act, spend
-  the repository's LLM budget, or change a pull request.
+  the repository's LLM budget, change a pull request, or cause software to
+  be downloaded.
 - Text in a comment or a pull request can change which program runs, which
   arguments it gets, where the LLM key is sent, or what the bot's token is
   used for.
+- A command run executes software whose exact content is not fixed by a hash
+  committed in this repository.
 - A secret (LLM key, GitHub token, App private key, webhook secret) appears
   in a log, a comment, or an error message.
 - The Actions and server deployments make different authorisation decisions
@@ -107,8 +121,12 @@ Checked on 2026-11-23:
 - `@probot/adapter-github-actions` 5.0.1 depends on Probot `^14.0.2`.
 - GitHub Actions JavaScript actions must use `node24`. Node 20 was removed
   from runners in September 2026.
+- A JavaScript action runs without an install step, so its code and Node
+  dependencies must be bundled and committed.
 - PR-Agent is a Python program, version 0.50.0 on PyPI. The bot is Node. They
   can only meet through a process boundary.
+- GitHub-hosted runners start clean. Nothing installed in one run is there in
+  the next.
 - In the Actions deployment the workflow trigger is `issue_comment`. That
   event runs the workflow from the default branch with access to secrets,
   and anyone can post a comment. The fork-checkout protection added to
@@ -120,50 +138,43 @@ Checked on 2026-11-23:
   other installations, in-memory state across events) must not be needed by
   any command.
 
-## Approaches
+## Approach
 
-The main design question is how a Node bot runs a Python tool in both
-deployments. Three ways were considered.
+The main design question was how a Node bot runs a Python tool in both
+deployments.
 
-### A. One container image, PR-Agent as a subprocess (proposed)
+### Chosen: JavaScript action with on-demand tools; container for the server
 
-The bot and a pinned PR-Agent are built into one container image. The bot
-starts PR-Agent as a child process. The same image is the server and is also
-what the GitHub Action runs (a Docker container action pointing at the
-published image by digest).
+Decided by the maintainer on 2026-11-23.
 
-- For: one artifact and one code path for the security-sensitive step in both
-  deployments. PR-Agent's version and its dependencies are pinned and scanned
-  once. Consumers install nothing.
-- Against: every command in the Actions deployment pays an image pull, an
-  estimated 20 to 40 seconds, including `/help`. Docker container actions run
-  only on Linux runners.
+- In Actions the bot is a bundled JavaScript action on the standard runner.
+  When a command needs a tool such as PR-Agent, the bot's own code installs
+  it for that run, from a lockfile in this repository, and then runs it.
+- On the server the same tools are already installed in the container image,
+  built from the same lockfiles.
+- The code that decides whether to run a command, and the code that starts
+  the tool, are the same in both deployments. Only the step that makes the
+  tool available differs, and it sits behind one small interface.
 
-### B. JavaScript action plus a separate PR-Agent step
+What this costs:
 
-The Action is a bundled JavaScript action that validates the command and sets
-outputs. A following workflow step, in a reusable workflow, runs PR-Agent.
-The server still uses a subprocess or a sidecar.
+- The install happens in a job that holds secrets, so it has to be locked
+  down. See "Tools and provisioning".
+- A command that needs PR-Agent waits for the install on every run.
+- If the package index is unreachable, those commands fail in Actions.
 
-- For: fast start for cheap commands.
-- Against: the PR-Agent invocation exists twice, once in YAML and once in
-  code. The two can drift, and YAML is harder to test. This works against the
-  reason for choosing Probot.
+### Considered and not chosen
 
-### C. Dispatch to a second workflow
-
-The bot validates the command and sends a `repository_dispatch` event; a
-second workflow runs PR-Agent.
-
-- For: clean separation between the privileged listener and the worker.
-- Against: needs a token that can trigger workflows (a GitHub App or a
-  personal token) even for the simplest setup, adds a second run per command,
-  and still leaves the server needing its own path.
-
-**Proposed: A.** The maintainer has not yet chosen. Approving this document
-approves A. If the image pull time turns out to be unacceptable, the fallback
-is a JavaScript action for commands that do not need PR-Agent, kept as a later
-change, not part of version 1.
+- **One container image for both deployments**, run in Actions as a Docker
+  container action. One artifact, but every command, including `/help`, waits
+  for an image pull on every run, and the image grows with each tool added
+  for any command.
+- **A second workflow step that runs PR-Agent.** The PR-Agent call would then
+  exist twice, in workflow YAML for Actions and in code for the server. The
+  two could drift, and YAML is harder to test.
+- **Dispatching to a second workflow.** Needs a token that can trigger
+  workflows even for the simplest setup, adds a second run per command, and
+  still leaves the server needing its own path.
 
 ## Design
 
@@ -176,18 +187,20 @@ comment event
 entrypoint ──► the same Probot app function
 (Actions adapter        │
  or Probot server)      ▼
-                 1. filter   is this a new comment on a PR, by a human?
-                 2. parse    is the first line a known command?
-                 3. config   is the command enabled in this repository?
-                 4. authz    may this person run it?
-                 5. ack      react to the comment
-                 6. run      command handler
-                 7. report   react, and comment on failure
+                 1. filter     is this a new comment on a PR, by a human?
+                 2. parse      is the first line a known command?
+                 3. config     is the command enabled in this repository?
+                 4. authz      may this person run it?
+                 5. ack        react to the comment
+                 6. provision  make the command's tools available
+                 7. run        command handler
+                 8. report     react, and comment on failure
 ```
 
 Steps 1 to 4 are pure decisions with no side effects apart from two read-only
 API calls (repository configuration and the commenter's permission). Nothing
-is written to GitHub and no child process starts until step 4 has passed.
+is written to GitHub, nothing is downloaded, and no child process starts until
+step 4 has passed.
 
 ### Parts
 
@@ -196,15 +209,19 @@ Each part has one job and can be tested alone.
 | Part | Job |
 |------|-----|
 | `app` | Registers the `issue_comment.created` handler and wires the parts together. The only part both entrypoints import. |
-| Entrypoints | `action`: runs `app` once through the Actions adapter. `server`: runs `app` under Probot's server. No logic of their own. |
+| Entrypoints | `action`: runs `app` once through the Actions adapter. `server`: runs `app` under Probot's server. Each chooses its tool provisioner and task runner. No other logic. |
 | Parser | Turns a comment body into either "not a command" or `{namespace, name}`. Pure function. |
-| Command registry | The fixed list of commands the bot knows, each with a handler, a default required permission, and help text. |
+| Command registry | The fixed list of commands the bot knows, each with a handler, a default required permission, the tools it needs, and help text. |
 | Repository config | Loads and validates `.github/repo-bot.yml` from the repository's default branch. |
 | Authoriser | Decides whether the commenter may run the command. |
-| Reporter | Reactions and comments back to the pull request. The only part that writes user-visible output. |
-| PR-Agent runner | Starts PR-Agent for one pull request and one tool, and returns success or a failure reason. The only part that starts a process. |
+| Reporter | Reactions and comments back to the pull request. The only part of the bot that writes to GitHub. (PR-Agent, a separate program, posts its own result.) |
+| Tool provisioner | Given a tool name from the registry, returns the path of a ready-to-run executable or a failure reason. Two implementations: install on demand (Actions) and find preinstalled (server). |
+| PR-Agent runner | Starts PR-Agent for one pull request and one tool, and returns success or a failure reason. |
 | Task runner | Runs a handler to completion. In Actions it runs inline. On the server it puts the work on a bounded in-process queue so the webhook is answered quickly. |
-| Settings | Reads deployment settings (LLM endpoint, model, key, timeouts) from environment variables, validates them at start-up, and never logs their values. |
+| Settings | Reads deployment settings (LLM endpoint, model, key, timeouts) from environment variables and never logs their values. Settings every command needs are validated at start-up. Settings only some commands need, such as the LLM settings, are validated when such a command runs, so `/help` works without them. |
+
+The tool provisioner and the PR-Agent runner are the only parts that start
+processes.
 
 ### Command grammar
 
@@ -242,17 +259,70 @@ the default branch, never from the pull request. It can:
 - raise the required permission for a command
 
 It is validated against a strict schema. Unknown keys are an error. If the
-file is invalid, the bot does nothing except report that its configuration is
-invalid, to someone who would have been allowed to run the command.
+file is invalid, no command runs. A commenter who has the default required
+permission, `write`, gets a reply that the configuration is invalid. Anyone
+else gets nothing.
 
 The LLM endpoint, model, and key are deployment settings, not repository
 configuration. They cannot be set from this file.
 
+### Tools and provisioning
+
+A tool is an external program that a command needs. Version 1 has one:
+PR-Agent, needed by `/pr:review` and `/pr:describe`. `/help` needs none.
+
+What the repository holds for each tool:
+
+- its exact version
+- a lockfile listing every package it depends on, each with an exact version
+  and content hashes
+- the exact version of the language runtime it runs on
+
+The same lockfiles are used to install on demand in Actions and to build the
+server image, so both deployments run the same versions. A check in
+continuous integration fails if they differ.
+
+Installing on demand, in Actions (all proposed):
+
+- It happens only after the command has been authorised, and only for the
+  tools that command declares.
+- It installs into a new private directory under the runner's temporary
+  directory, and adds nothing to the system.
+- Every package must match a hash in the lockfile. A mismatch stops the
+  install and the command fails.
+- Only prebuilt packages are accepted. Nothing is compiled and no package
+  build script runs.
+- The language runtime is pinned, not taken from whatever version the runner
+  image happens to have.
+- Anything the provisioner itself has to download in order to install (an
+  installer, a runtime) is checked against a hash committed in this
+  repository before it is used.
+- The install process gets a new environment built from an allow-list. It
+  contains no LLM key and no GitHub token.
+- Nothing is cached between runs. The Actions cache is shared state that a
+  less trusted run could alter, so the design does without it.
+- It has a time limit.
+- Supported platform: GitHub-hosted Linux x86-64 runners.
+
+On the server:
+
+- Tools are installed when the image is built, never while it is running.
+- The provisioner only locates the installed tool. If it is missing, the
+  command fails and the fault is logged as a broken image.
+
+Start-up targets for the Actions deployment, to be measured during planning
+(proposed):
+
+- `/help` adds no more than 5 seconds to the runner's own start-up.
+- Installing PR-Agent takes no more than 60 seconds.
+
+If measurement shows a target cannot be met under the rules above, that goes
+back to the maintainer before any rule is relaxed.
+
 ### Running PR-Agent
 
-- PR-Agent is installed in the image at an exact version with hash-checked
-  dependencies.
-- The runner starts it directly, without a shell, with a fixed argument list:
+- The runner gets the PR-Agent executable from the tool provisioner.
+- It starts PR-Agent directly, without a shell, with a fixed argument list:
   the pull request URL built from the event's repository and number, and the
   tool name taken from the command registry. No text from the comment or the
   pull request is ever part of the arguments.
@@ -277,7 +347,9 @@ output to decide what to do, and PR-Agent is given no ability to act beyond
 the comment (and, for `describe`, whatever the maintainer allows under Open
 questions). The threat model records this as an accepted risk.
 
-**To verify during planning, before any PR-Agent code is written:**
+### To verify during planning
+
+Before any PR-Agent or provisioning code is written:
 
 1. How to turn PR-Agent's repository-level settings (`.pr_agent.toml`) off
    completely, and proof that it works. If PR-Agent could read them from a
@@ -288,6 +360,11 @@ questions). The threat model records this as an accepted risk.
 3. The exact setting names for passing a GitHub token.
 4. That `describe` can be limited to what the maintainer wants it to change
    (see Open questions).
+5. That every package PR-Agent depends on is available prebuilt for the
+   supported platform. If one is not, that goes back to the maintainer.
+6. A way to get a pinned Python runtime and a hash-checked install on a
+   GitHub-hosted runner that meets the rules in "Tools and provisioning",
+   with measured times against the start-up targets.
 
 Findings go into the threat model with a test for each.
 
@@ -301,12 +378,21 @@ Findings go into the threat model with a test for each.
 
 ### Actions deployment
 
-- The repository publishes a Docker container action and a reusable workflow
-  that wraps it with the right trigger filter and permissions.
-- A consuming repository adds a workflow of a few lines that listens for
-  `issue_comment` and calls the reusable workflow, passing its LLM secret.
-- The workflow skips, at no runner cost, comments that are not on a pull
-  request or do not start with a slash.
+- The repository publishes a JavaScript action for the `node24` runtime, with
+  the bot and its Node dependencies bundled into committed files.
+- A consuming repository adds one short workflow, copied from a template in
+  this repository's documentation. It listens for `issue_comment`, grants
+  the permissions below, passes the LLM settings, and uses the action pinned
+  to a commit.
+- The template skips, at no runner cost, comments that are not on a pull
+  request or do not start with a slash. That filter only saves runner time.
+  The bot makes every check itself and is safe without it.
+- This repository keeps a copy of the template as a real workflow, so that
+  continuous integration checks it.
+- There is no reusable workflow in version 1. A reusable workflow would have
+  to name the action by a commit it cannot know, or by a tag that can move.
+  (Proposed.)
+- It runs on a GitHub-hosted Linux runner. No container is involved.
 - Token permissions requested: `pull-requests: write`, `issues: write`,
   `contents: read`. Nothing else.
 - The pull request's code is never checked out.
@@ -314,7 +400,7 @@ Findings go into the threat model with a test for each.
 
 ### Server deployment
 
-- The same image, started in server mode, as a GitHub App.
+- A container image holding the bot and its tools, run as a GitHub App.
 - Probot verifies webhook signatures. Unsigned or wrongly signed requests are
   rejected.
 - For each event the server uses a short-lived installation token scoped to
@@ -334,11 +420,14 @@ Findings go into the threat model with a test for each.
 
 ### Limits on use
 
-- Only one run of a given command is active per pull request. A second
-  request for the same command on the same pull request while one is running
-  is refused with a reaction. In Actions this is a workflow concurrency group
-  per pull request and command, without cancelling the run in progress. On
-  the server the queue enforces it. (Proposed.)
+- On the server, only one run of a given command is active per pull
+  request. A second request for the same command on the same pull request
+  while one is running or waiting is refused with a reaction. (Proposed.)
+- In Actions there is no such limit in version 1, so two runs of the same
+  command can overlap. The only built-in mechanism, a workflow concurrency
+  group, takes effect before the bot has authorised anyone, which would let
+  an outsider's comment displace an authorised command that is waiting.
+  (Proposed.)
 - There is no other rate limit in version 1. People who can run commands
   already have write access to the repository.
 
@@ -347,8 +436,9 @@ Findings go into the threat model with a test for each.
 - On accept: an "eyes" reaction on the command comment.
 - On success: a "rocket" reaction. PR-Agent's own output is the result.
 - On failure: a "confused" reaction and one short comment with a reason
-  category (timed out, provider unavailable, misconfigured, internal error)
-  and a reference a maintainer can find in the logs. No raw error text.
+  category (timed out, tool unavailable, provider unavailable, misconfigured,
+  internal error) and a reference a maintainer can find in the logs. No raw
+  error text.
 
 ### Future commands that touch pull request code
 
@@ -372,8 +462,12 @@ of done.
   a command; shell and option characters; very long input; unusual Unicode,
   including look-alike characters and control characters; and malformed
   repository configuration.
-- A test proves the child process environment contains only the allow-listed
-  names.
+- Tests prove that the environments of the install process and of the tool
+  process contain only their allow-listed names, and that the install
+  environment holds no secret.
+- A test proves that nothing is installed or downloaded for a comment that
+  is not an authorised command.
+- A test proves that a package whose hash does not match stops the install.
 - A test proves secrets do not appear in logs or comments on any failure
   path.
 - Every finding from a review gets a regression test before it is closed.
@@ -387,20 +481,27 @@ strictness as its Python baseline. (All proposed.)
 - Package manager: npm with a committed lockfile. Install scripts disabled.
 - Tests: Vitest, with recorded GitHub API responses for handler tests and a
   stand-in `pr-agent` executable for runner tests. Coverage threshold
-  enforced; the parser, authoriser, and runner at 100% of branches.
+  enforced; the parser, authoriser, tool provisioner, and runner at 100% of
+  branches.
 - Lint and format: ESLint with the strict type-checked rules, Prettier.
-- Layout: `src/` for the parts above, `test/`, `docs/`, `action.yml`,
-  `Dockerfile`, `.github/workflows/`.
-- Agent layout: already in place on the `setup/superpowers` branch
-  (`AGENTS.md`, `CLAUDE.md`, `.agents/`).
+- Layout: `src/` for the parts above, `test/`, `docs/`, the tool lockfiles,
+  the committed action bundle, `action.yml`, `Dockerfile`,
+  `.github/workflows/`.
+- Agent layout: already in place (`AGENTS.md`, `CLAUDE.md`, `.agents/`).
 
 Continuous integration, all blocking on pull requests:
 
 - typecheck, lint, format check, tests with coverage, build
+- a check that the committed action bundle is exactly what a fresh build
+  produces
+- a check that the tool lockfiles are complete, hash-locked, and the same
+  for Actions and for the server image
+- a job that performs a real on-demand install on a GitHub-hosted runner and
+  runs the installed tool's version command
 - CodeQL for JavaScript/TypeScript and for the workflows themselves
 - a workflow linter and a workflow security scanner
-- dependency review, and a check that the lockfile is in sync
-- image build, Dockerfile lint, and an image vulnerability scan
+- dependency review, and a check that the npm lockfile is in sync
+- server image build, Dockerfile lint, and an image vulnerability scan
 - the agent-skill link check from the pre-commit configuration
 
 Repository rules:
@@ -409,26 +510,24 @@ Repository rules:
   permissions and request what each job needs.
 - `main` is protected: pull requests only, required checks, at least one
   human approval.
-- Automated dependency update pull requests.
+- Automated dependency update pull requests, covering npm, the tool
+  lockfiles, actions, and the image base.
 - Secret scanning with push protection.
 
-Releases:
+Releases (proposed):
 
-- Each release publishes the image to the GitHub container registry with a
-  provenance attestation and a software bill of materials.
-- `action.yml` names the image by digest, so the image has to exist before
-  the commit that refers to it. A release is therefore a pull request: the
-  image is built from the current `main`, and a release pull request changes
-  only the version and the digest in `action.yml`. A human merges it, and the
-  merge commit is tagged. The image is one commit behind the tag, and that
-  commit contains no code. Nothing bypasses branch protection. (Proposed.)
-- Consumers pin the tagged commit. The reusable workflow refers to the action
-  in the same repository at the same commit.
+- A release is a tag on a commit of `main`, created by a person. The bundle
+  at that commit has already been verified by continuous integration.
+- Consumers pin the tagged commit in their copy of the workflow template.
+- The server image is built from the tagged commit and published to the
+  GitHub container registry with a provenance attestation and a software
+  bill of materials.
 
 Testing against real services:
 
 - Automated tests never call GitHub or an LLM. They use recorded responses
-  and the stand-in executable.
+  and the stand-in executable. The install job above contacts the package
+  index and nothing else.
 - End-to-end checks against a real repository and a real LLM endpoint are
   run by hand before a release, following a written checklist. (Proposed.)
 
@@ -439,7 +538,7 @@ Agents cannot do these. They block the steps noted.
 - Turn on branch protection, secret scanning with push protection, and code
   scanning for `grAItools/repo-bot`. Blocks: the repository rules above.
 - Allow the repository to publish packages to the container registry.
-  Blocks: releases.
+  Blocks: publishing the server image.
 - Provide a sandbox repository, and a fork of it, for the end-to-end
   checklist. Blocks: the first release.
 - Provide an LLM endpoint and key for the end-to-end checklist. Blocks: the
@@ -459,63 +558,83 @@ Agents cannot do these. They block the steps noted.
 
 - Module boundaries inside `src/` and exact type definitions.
 - The schema library for configuration and settings validation.
+- The bundler for the action.
+- The installer used for on-demand installs, the lockfile format, and how
+  the pinned runtime is obtained, within the rules in "Tools and
+  provisioning".
 - The choice of workflow linter, workflow security scanner, Dockerfile
   linter, and image scanner.
 - Base images, as long as they are pinned by digest and small.
 - Log format, as long as it is structured and masks secrets.
-- Queue size, worker count, and the PR-Agent time limit, as documented
-  defaults that a deployment can change.
+- Queue size, worker count, and the install and PR-Agent time limits, as
+  documented defaults that a deployment can change.
 - Wording of help text and failure comments.
 - The order of work, to be set out in the implementation plan. The plan
   should start with the repository tooling and checks, then the command
-  framework with `/help`, then PR-Agent, then the server deployment, then
-  release.
+  framework with `/help` as a working Actions deployment, then tool
+  provisioning and PR-Agent, then the server deployment, then release.
 
 ## Calls made in this document
 
 The maintainer should check these while reading.
 
-1. Approach A: one image, PR-Agent as a subprocess, Docker container action.
-2. `/help` is included.
-3. Version 1 commands take no arguments, and extra text is rejected.
-4. Unknown commands are ignored silently; refused commands get a reaction
+1. `/help` is included.
+2. Version 1 commands take no arguments, and extra text is rejected.
+3. Unknown commands are ignored silently; refused commands get a reaction
    only.
-5. Required permission defaults to `write` and cannot be lowered.
-6. Repository configuration can only enable, disable, and tighten. LLM
+4. Required permission defaults to `write` and cannot be lowered.
+5. Repository configuration can only enable, disable, and tighten. LLM
    settings are deployment-only.
-7. The LLM endpoint is any OpenAI-compatible `https` URL, with CSCS as the
+6. The LLM endpoint is any OpenAI-compatible `https` URL, with CSCS as the
    documented default.
-8. The server uses an in-process queue with no external store.
-9. TypeScript, Node 24, npm, Vitest, ESLint, Prettier.
-10. `main` requires a human approval on every pull request.
-11. OpenSpec is not used; Superpowers design documents and plans are the
+7. The server uses an in-process queue with no external store.
+8. TypeScript, Node 24, npm, Vitest, ESLint, Prettier.
+9. `main` requires a human approval on every pull request.
+10. OpenSpec is not used; Superpowers design documents and plans are the
     record of intent.
-12. PR-Agent's repository settings file is off, and consuming repositories
+11. PR-Agent's repository settings file is off, and consuming repositories
     cannot customise PR-Agent in version 1.
-13. `/pr:review` only posts a comment. LLM-written comment text based on
+12. `/pr:review` only posts a comment. LLM-written comment text based on
     fork content is an accepted risk; the bot never acts on it.
-14. The server requires an allow-list of account owners.
-15. One active run per command per pull request; no other rate limit.
-16. Releases go through a human-merged pull request that sets the image
-    digest; the image is one code-free commit behind the tag.
-17. End-to-end checks are manual, from a checklist, before each release.
+13. The server requires an allow-list of account owners.
+14. On the server, one active run per command per pull request. In Actions,
+    no limit. No other rate limit.
+15. On-demand installs are hash-locked, prebuilt packages only, with a pinned
+    runtime, no cache, no secrets in the install environment, and only after
+    authorisation.
+16. The server never installs at run time; its image is built from the same
+    lockfiles.
+17. The Actions deployment supports GitHub-hosted Linux x86-64 runners only.
+18. Start-up targets: 5 seconds for `/help`, 60 seconds to install PR-Agent,
+    measured during planning.
+19. A release is a tag created by a person; the server image is built from
+    the tagged commit.
+20. End-to-end checks are manual, from a checklist, before each release.
+21. Consumers copy a short workflow template; there is no reusable workflow
+    in version 1.
 
 ## Open questions
+
+None of these blocks the implementation plan or the command framework. Each
+names what it does block.
 
 1. **What may `/pr:describe` change?** PR-Agent's describe tool can rewrite
    the pull request title and body and add labels. Should it overwrite the
    author's title and description, or post its description as a comment and
-   leave them alone?
+   leave them alone? Blocks: building `/pr:describe`.
 2. **Which CSCS model, and what is its input size limit?** The bot needs a
-   model name and a maximum input size to configure PR-Agent.
+   model name and a maximum input size to configure PR-Agent. Blocks: the
+   documented default and the end-to-end checklist.
 3. **Can GitHub-hosted runners reach the CSCS endpoint?** If it is only
    reachable from certain networks, the Actions deployment cannot use it
    from GitHub's runners, and the design needs either self-hosted runners or
-   a different default provider for that deployment.
+   a different default provider for that deployment. Blocks: the documented
+   default for Actions.
 4. **Who provides the LLM key for other organisations' repositories?** The
    design assumes each consuming repository supplies its own endpoint and
    key. If the intent is for grAItools to provide CSCS access to others, that
-   is a different and much riskier design.
+   is a different and much riskier design. Blocks: nothing, if the assumption
+   holds.
 5. **Who will do the items under "Prerequisites that need a person", and
    when?** They include registering the GitHub App and providing a sandbox
-   repository and an LLM key for testing.
+   repository and an LLM key for testing. Blocks: as listed in that section.

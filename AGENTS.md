@@ -5,8 +5,11 @@ It responds to slash commands in pull request comments and is meant to be
 deployable in two ways from the same code: as a GitHub Action that other
 repositories reference, and as a standalone server.
 
-The project is at the very beginning. There is no design, code, or tooling yet.
-The first piece of work is the design, produced with the workflow below.
+The project is at the very beginning. There is no code or tooling yet. The
+design is in
+[`docs/superpowers/specs/2026-11-23-repo-bot-design.md`](docs/superpowers/specs/2026-11-23-repo-bot-design.md).
+Read it before any work. The next piece of work is the implementation plan
+for that design.
 
 ## Development workflow (mandatory)
 
@@ -15,8 +18,9 @@ design and development work. The skills are vendored in `.agents/skills/`.
 
 1. At the start of every session, read
    `.agents/skills/using-superpowers/SKILL.md` and follow it.
-2. Before building anything, use the `brainstorming` skill. Do not write code
-   before a design has been approved by the maintainer.
+2. Before building anything that the design does not already cover, use the
+   `brainstorming` skill. Do not write code before a design has been approved
+   by the maintainer.
 3. Follow the skills for planning, test-driven development, debugging, code
    review, and verification as they apply.
 
