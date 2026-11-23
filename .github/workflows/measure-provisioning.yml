@@ -53,7 +53,7 @@ jobs:
           t_py=$(since "$t")
 
           # Not part of the measured install: the real lockfile will be committed.
-          echo "pr-agent==${PR_AGENT_VERSION}" > req.in
+          echo "pr-agent[github]==${PR_AGENT_VERSION}" > req.in
           clean uv pip compile req.in --generate-hashes --only-binary :all: \
             --python "$work/python/bin/python3" -o req.lock -q
           packages=$(grep -c '==' req.lock)
