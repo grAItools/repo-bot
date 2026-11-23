@@ -31,6 +31,19 @@ same name in `.agents/skills/`.
 Design documents go in `docs/superpowers/specs/` and implementation plans in
 `docs/superpowers/plans/`, as the skills specify.
 
+Where the skills offer a choice, these rules decide it:
+
+- `main` changes only through pull requests. Never merge into `main` locally
+  and never push to it. When `finishing-a-development-branch` offers its
+  options, take the one that pushes the branch and opens a pull request.
+- Never file an issue on another project, and never export or share a
+  session transcript or diagnostic bundle (as `diagnosing-superpowers` can),
+  unless the maintainer asks for exactly that in the same session.
+- Set `SUPERPOWERS_DISABLE_TELEMETRY=1` in the environment of anything the
+  skills start, including the `brainstorming` visual companion.
+- Before committing a change under `.agents/`, run
+  `.agents/scripts/sync-skills.sh` and commit the links with it.
+
 ## Security
 
 This bot runs with repository write permissions and reacts to comments that

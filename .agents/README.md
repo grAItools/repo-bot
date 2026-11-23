@@ -7,12 +7,20 @@ conventions. The layout is modelled on the grAItools
 
 ## Supported harnesses
 
-No harness has been validated against this repository yet. When one is, record
-it here.
-
 | Harness | Tested version | Validated on | Adapters | Limitations |
 |---------|----------------|--------------|----------|-------------|
-| Claude Code | not yet validated | | `CLAUDE.md` imports `AGENTS.md` and the bootstrap skill; `.claude/skills/` links | |
+| Claude Code | 2.1.330 | 2026-11-23 | `CLAUDE.md` imports `AGENTS.md` and the bootstrap skill; `.claude/skills/` links; `.claude/settings.json` sets `SUPERPOWERS_DISABLE_TELEMETRY` | See below |
+
+What was checked for Claude Code, in a cloud session on this repository: the
+imports in `CLAUDE.md` resolve, so `AGENTS.md` and the `using-superpowers`
+skill are loaded as project instructions; the 15 skills are listed; and a
+skill (`receiving-code-review`) loads when invoked.
+
+Not checked: that a new session with no other context starts `brainstorming`
+by itself when asked to build something. The upstream plugin's session-start
+hook is not installed here; the `CLAUDE.md` import stands in for it.
+
+No other harness has been tried.
 
 ## Layout
 
@@ -37,8 +45,10 @@ a harness plugin hook. Here that is replaced by the instruction in the root
 `AGENTS.md` and, for Claude Code, by an import in `CLAUDE.md`.
 
 The `brainstorming` skill has an optional visual companion that starts a local
-server and loads a logo from the upstream author's website. Set
-`SUPERPOWERS_DISABLE_TELEMETRY=1` to turn that request off.
+server and loads a logo from the upstream author's website. In this
+repository that request is off: `AGENTS.md` requires
+`SUPERPOWERS_DISABLE_TELEMETRY=1`, and `.claude/settings.json` sets it for
+Claude Code.
 
 ### Updating Superpowers
 
@@ -46,6 +56,13 @@ server and loads a logo from the upstream author's website. Set
 2. Review the diff of its `skills/` directory against `.agents/skills/`.
 3. Replace `.agents/skills/` with the new copy and update the table above.
 4. Run `.agents/scripts/sync-skills.sh` and commit the skills and links together.
+
+## Local checks
+
+There is no continuous integration yet. Until there is, run
+`.agents/scripts/sync-skills.sh` before committing a change under `.agents/`,
+or install the hook once with `pre-commit install`. A non-zero exit means the
+harness links are out of date or unstaged.
 
 ## Adding a skill
 
