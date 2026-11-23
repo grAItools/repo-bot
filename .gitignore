@@ -1,0 +1,5 @@
+# Agent configuration: machine-local files
+.agents/skills-local/*
+!.agents/skills-local/.gitkeep
+.claude/settings.local.json
+.claude/worktrees/
